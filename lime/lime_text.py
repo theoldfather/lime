@@ -84,7 +84,7 @@ class IndexedString(object):
     """String with various indexes."""
 
     def __init__(self, raw_string, split_expression=r'\W+', bow=True,
-                 mask_string=None):
+                 mask_string=None, use_word_pieces=False):
         """Initializer.
 
         Args:
@@ -100,10 +100,11 @@ class IndexedString(object):
         """
         self.raw = raw_string
         self.mask_string = 'UNKWORDZ' if mask_string is None else mask_string
+        self.use_word_pieces = use_word_pieces
 
         if callable(split_expression):
             tokens = split_expression(self.raw)
-            self.as_list = self._segment_with_tokens(self.raw, tokens)
+            self.as_list = self._segment_with_tokens(self.raw, tokens, use_word_pieces=use_word_pieces)
             tokens = set(tokens)
 
             def non_word(string):
@@ -176,25 +177,33 @@ class IndexedString(object):
         """
         mask = np.ones(self.as_np.shape[0], dtype='bool')
         mask[self.__get_idxs(words_to_remove)] = False
+
         if not self.bow:
-            return ''.join(
+            result = ''.join(
                 [self.as_list[i] if mask[i] else self.mask_string
                  for i in range(mask.shape[0])])
-        return ''.join([self.as_list[v] for v in mask.nonzero()[0]])
+        else:
+            result = ''.join([self.as_list[v] for v in mask.nonzero()[0]])
+
+        if self.use_word_pieces:
+            result = result.replace("##","")
+
+        return result
 
     @staticmethod
-    def _segment_with_tokens(text, tokens):
+    def _segment_with_tokens(text, tokens, use_word_pieces=False):
         """Segment a string around the tokens created by a passed-in tokenizer"""
         list_form = []
         text_ptr = 0
         for token in tokens:
             inter_token_string = []
-            while not text[text_ptr:].startswith(token):
+            lookup_token = token if not use_word_pieces else token.replace("##","")
+            while not text[text_ptr:].startswith(lookup_token):
                 inter_token_string.append(text[text_ptr])
                 text_ptr += 1
-                if text_ptr >= len(text):
+                if text_ptr >= len(text) and not use_word_pieces:
                     raise ValueError("Tokenization produced tokens that do not belong in string!")
-            text_ptr += len(token)
+            text_ptr += len(lookup_token)
             if inter_token_string:
                 list_form.append(''.join(inter_token_string))
             list_form.append(token)
@@ -315,7 +324,8 @@ class LimeTextExplainer(object):
                  bow=True,
                  mask_string=None,
                  random_state=None,
-                 char_level=False):
+                 char_level=False,
+                 use_word_pieces=False):
         """Init function.
 
         Args:
@@ -366,6 +376,7 @@ class LimeTextExplainer(object):
         self.mask_string = mask_string
         self.split_expression = split_expression
         self.char_level = char_level
+        self.use_word_pieces = use_word_pieces
 
     def explain_instance(self,
                          text_instance,
@@ -410,7 +421,8 @@ class LimeTextExplainer(object):
                           if self.char_level else
                           IndexedString(text_instance, bow=self.bow,
                                         split_expression=self.split_expression,
-                                        mask_string=self.mask_string))
+                                        mask_string=self.mask_string,
+                                        use_word_pieces=self.use_word_pieces))
         domain_mapper = TextDomainMapper(indexed_string)
         data, yss, distances = self.__data_labels_distances(
             indexed_string, classifier_fn, num_samples,
